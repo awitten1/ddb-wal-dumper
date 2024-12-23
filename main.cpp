@@ -1,4 +1,5 @@
 
+#include <_types/_uint8_t.h>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
@@ -6,6 +7,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include "duckdb.hpp"
+#include "duckdb/common/checksum.hpp"
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/enums/wal_type.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
@@ -50,24 +52,20 @@ auto OpenWal(const std::string& wal_path) {
 }
 
 void ReadVersion(uint8_t** buf) {
-    int incremented = 0;
     duckdb::field_id_t field;
     field = *(duckdb::field_id_t*)(*buf);
     // https://github.com/duckdb/duckdb/blob/v1.1.3/src/storage/write_ahead_log.cpp#L164
     ASSERT(field == 100);
     (*buf)+=sizeof(field);
-    incremented += sizeof(field);
 
     WalUnderlyingType wal_type;
     uint64_t num_read = duckdb::EncodingUtil::DecodeUnsignedLEB128(*buf, wal_type);
     ASSERT(wal_type == static_cast<WalUnderlyingType>(duckdb::WALType::WAL_VERSION));
     (*buf)+=num_read;
-    incremented += num_read;
 
     field = *(duckdb::field_id_t*)*buf;
     ASSERT(field == 101);
     (*buf)+=sizeof(field);
-    incremented += sizeof(field);
 
     duckdb::idx_t wal_version_number;
     num_read = duckdb::EncodingUtil::DecodeUnsignedLEB128(*buf, wal_version_number);
@@ -91,6 +89,11 @@ void ScanWal(uint8_t* buf, uint64_t sz) {
         uint64_t log_record_checksum = *(uint64_t*)buf;
         buf += 8;
         ASSERT((end - buf) >= log_record_size);
+
+        // parameter should be const here probably.
+        // if it does write into it parameter, it will crash because of PROT_READ.
+        uint64_t checksum = duckdb::Checksum(buf, log_record_size);
+        ASSERT(checksum == log_record_checksum);
         buf += log_record_size;
     }
     ASSERT(buf == end);

@@ -9,6 +9,7 @@
 #include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/enums/wal_type.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
+#include "duckdb/common/typedefs.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/common/serializer/encoding_util.hpp"
 #include <fcntl.h>
@@ -41,7 +42,7 @@ auto OpenWal(const std::string& wal_path) {
 
     std::unique_ptr<uint8_t, decltype(rel)> b(buf, rel);
     madvise(buf, st.st_size, MADV_SEQUENTIAL);
-    
+
     WalBuffer<decltype(b)> ret{std::move(b), 
         static_cast<uint64_t>(st.st_size)};
 
@@ -49,30 +50,33 @@ auto OpenWal(const std::string& wal_path) {
 }
 
 void ReadVersion(uint8_t** buf) {
+    int incremented = 0;
     duckdb::field_id_t field;
-    field = **buf;
+    field = *(duckdb::field_id_t*)(*buf);
     // https://github.com/duckdb/duckdb/blob/v1.1.3/src/storage/write_ahead_log.cpp#L164
     ASSERT(field == 100);
     (*buf)+=sizeof(field);
+    incremented += sizeof(field);
 
     WalUnderlyingType wal_type;
     uint64_t num_read = duckdb::EncodingUtil::DecodeUnsignedLEB128(*buf, wal_type);
     ASSERT(wal_type == static_cast<WalUnderlyingType>(duckdb::WALType::WAL_VERSION));
     (*buf)+=num_read;
+    incremented += num_read;
 
-    field = **buf;
+    field = *(duckdb::field_id_t*)*buf;
     ASSERT(field == 101);
     (*buf)+=sizeof(field);
+    incremented += sizeof(field);
 
-    uint64_t wal_version_number;
+    duckdb::idx_t wal_version_number;
     num_read = duckdb::EncodingUtil::DecodeUnsignedLEB128(*buf, wal_version_number);
-    (*buf)+=num_read;
+    (*buf) += num_read;
     ASSERT(wal_version_number == 2);
 
-    field = **buf;
-    ASSERT(field == 0xFF);
+    field = *(duckdb::field_id_t*)*buf;
+    ASSERT(field == duckdb::MESSAGE_TERMINATOR_FIELD_ID);
     (*buf)+=sizeof(field);
-
 }
 
 void ScanWal(uint8_t* buf, uint64_t sz) {

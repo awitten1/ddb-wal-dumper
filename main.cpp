@@ -19,10 +19,14 @@
 #include "duckdb/common/enums/wal_type.hpp"
 #include "duckdb/common/serializer/serialization_traits.hpp"
 #include "duckdb/common/typedefs.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/common/serializer/encoding_util.hpp"
 #include <fcntl.h>
 #include <type_traits>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <vector>
 
 #define ASSERT(ret) \
     if (!(ret)) {           \
@@ -58,21 +62,81 @@ void ReadVersion(duckdb::BinaryDeserializer& deserializer) {
     deserializer.End();
 }
 
-void ParseCreateTable(uint8_t* buf) {
+// Consumes a buffer.  Non-owning.
+class BufferStream : public duckdb::ReadStream {
+    uint8_t* buffer_;
+    const uint8_t* end_ptr_;
+    const uint8_t* start_ptr_;
+public:
 
+    BufferStream(uint8_t* buffer, size_t sz) : buffer_(buffer), end_ptr_(buffer_ + sz), start_ptr_(buffer) {}
+    void ReadData(uint8_t* dst, idx_t read_size) override {
+        memcpy(dst, buffer_, read_size);
+        buffer_ += read_size;
+    }
+
+    bool Done() {
+        return buffer_ == end_ptr_;
+    }
+
+    uint8_t* GetBuffer() {
+        return buffer_;
+    }
+
+    size_t GetRemainder() {
+        return end_ptr_ - buffer_;
+    }
+
+    size_t GetOffset() {
+        return buffer_ - start_ptr_;
+    }
+};
+
+struct CreateTableInfo {
+    CreateTableInfo(duckdb::WALType wal_type_, size_t offset) : file_offset(offset) {
+        wal_type = duckdb::EnumUtil::ToString(wal_type_);
+    }
+    std::string table;
+    std::string query;
+    std::vector<std::string> columns;
+    std::string wal_type;
+    size_t file_offset;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(CreateTableInfo, table, query, columns, wal_type, file_offset);
+};
+
+
+void ParseCreateTable(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset) {
+    deserializer.Begin();
+    auto info = deserializer.ReadProperty<duckdb::unique_ptr<duckdb::CreateInfo>>(101, "table");
+    std::cout << duckdb::EnumUtil::ToString(info->type) << std::endl;
+
+    auto& create_table_info = dynamic_cast<duckdb::CreateTableInfo&>(*info);
+    std::cout << create_table_info.table << std::endl;
+    CreateTableInfo ct{wal_type, file_offset};
+    ct.table = create_table_info.table;
+    ct.columns = create_table_info.columns.GetColumnNames();
+    if (create_table_info.query) {
+        ct.query = create_table_info.query->ToString();
+    }
+    nlohmann::json j = ct;
+    std::cout << j.dump() << std::endl;
+
+    deserializer.End();
 }
 
-void ParseWalRecord(duckdb::BinaryDeserializer& deserializer) {
+void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset) {
+    BufferStream stream(wal_buf.get(), sz);
+    duckdb::BinaryDeserializer deserializer(stream);
     auto wal_enum_type = deserializer.ReadProperty<duckdb::WALType>(100, "wal_type");
-
 
     switch (wal_enum_type) {
     case duckdb::WALType::INVALID:
         throw std::runtime_error{"invalid wal type"};
         break;
     case duckdb::WALType::CREATE_TABLE:
-    
-    break;
+        ParseCreateTable(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::DROP_TABLE:
     
     break;
@@ -151,30 +215,6 @@ void ParseWalRecord(duckdb::BinaryDeserializer& deserializer) {
     }
 }
 
-class BufferStream : public duckdb::ReadStream {
-    uint8_t* buffer_;
-    uint8_t* end_ptr_;
-public:
-
-    BufferStream(uint8_t* buffer, size_t sz) : buffer_(buffer), end_ptr_(buffer_ + sz) {}
-    void ReadData(uint8_t* dst, idx_t read_size) override {
-        memcpy(dst, buffer_, read_size);
-        buffer_ += read_size;
-    }
-
-    bool Done() {
-        return buffer_ == end_ptr_;
-    }
-
-    uint8_t* GetBuffer() {
-        return buffer_;
-    }
-
-    size_t GetRemainder() {
-        return end_ptr_ - buffer_;
-    }
-};
-
 void ScanWal(uint8_t* buf, uint64_t sz) {
 
     BufferStream stream(buf, sz);
@@ -197,8 +237,9 @@ void ScanWal(uint8_t* buf, uint64_t sz) {
         uint64_t checksum = duckdb::Checksum(log_record_buf.get(), log_record_size);
         ASSERT(checksum == log_record_checksum);
 
-        //ParseWalRecord(buf, log_record_size);
+        ParseWalRecord(std::move(log_record_buf), log_record_size, stream.GetOffset());
     }
+    ASSERT(stream.GetRemainder() == 0)
 }
 
 int main(int argc, char** argv) {

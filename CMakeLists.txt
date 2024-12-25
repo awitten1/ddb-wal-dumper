@@ -10,13 +10,5 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 target_link_libraries(ddb-wal-dump PRIVATE duckdb_static)
 set_target_properties(ddb-wal-dump PROPERTIES CXX_STANDARD 17)
 
-include(FetchContent)
-
-FetchContent_Declare(
-    json 
-    URL 
-    https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-)
-FetchContent_MakeAvailable(json)
-
-target_link_libraries(ddb-wal-dump PRIVATE nlohmann_json::nlohmann_json)
+find_package(fmt REQUIRED)
+target_link_libraries(ddb-wal-dump PRIVATE fmt::fmt)

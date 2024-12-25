@@ -145,6 +145,24 @@ void ParseUseTable(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal
     ASSERT(dynamic_cast<const BufferStream&>(deserializer.GetStream()).Done());
 }
 
+void ParseCreateSchema(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset){
+    auto schema = deserializer.ReadProperty<std::string>(101, "schema");
+    fmt::print("wal_type={}, schema={}, file_offset={}\n",
+        duckdb::EnumUtil::ToString(wal_type), schema, file_offset);
+    deserializer.End();
+    ASSERT(dynamic_cast<const BufferStream&>(deserializer.GetStream()).Done());
+}
+
+void ParseDeleteTuple(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset){
+	duckdb::DataChunk chunk;
+	deserializer.ReadObject(101, "chunk", [&](duckdb::Deserializer &object) { chunk.Deserialize(object); });
+    fmt::print("wal_type={}, file_offset={}\n",
+        duckdb::EnumUtil::ToString(wal_type), file_offset);
+    std::cout << chunk.ToString() << std::endl;
+    deserializer.End();
+    ASSERT(dynamic_cast<const BufferStream&>(deserializer.GetStream()).Done());
+}
+
 void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset) {
     BufferStream stream(wal_buf.get(), sz);
     duckdb::BinaryDeserializer deserializer(stream);
@@ -162,8 +180,8 @@ void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset
         ParseDropTable(deserializer, wal_enum_type, offset);
         break;
     case duckdb::WALType::CREATE_SCHEMA:
-    
-    break;
+        ParseCreateSchema(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::DROP_SCHEMA:
     
     break;
@@ -216,8 +234,8 @@ void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset
         ParseInsertTuple(deserializer, wal_enum_type, offset);
         break;
     case duckdb::WALType::DELETE_TUPLE:
-    
-    break;
+        ParseDeleteTuple(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::UPDATE_TUPLE:
     
     break;

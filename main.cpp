@@ -20,6 +20,7 @@
 #include "duckdb/common/serializer/serialization_traits.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/common/serializer/encoding_util.hpp"
 #include <fcntl.h>
@@ -98,30 +99,66 @@ struct CreateTableInfo {
     }
     std::string table;
     std::string query;
+    std::string schema;
     std::vector<std::string> columns;
     std::string wal_type;
     size_t file_offset;
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(CreateTableInfo, table, query, columns, wal_type, file_offset);
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(CreateTableInfo, table, schema, query, columns, wal_type, file_offset);
 };
+
+struct DropTableInfo {
+    DropTableInfo(duckdb::WALType wal_type_, size_t offset) : file_offset(offset) {
+        wal_type = duckdb::EnumUtil::ToString(wal_type_);
+    }
+    std::string table;
+    std::string schema;
+    std::string wal_type;
+    size_t file_offset;
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(DropTableInfo, table, schema, wal_type, file_offset);
+};
+
 
 
 void ParseCreateTable(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset) {
     deserializer.Begin();
     auto info = deserializer.ReadProperty<duckdb::unique_ptr<duckdb::CreateInfo>>(101, "table");
-    std::cout << duckdb::EnumUtil::ToString(info->type) << std::endl;
 
     auto& create_table_info = dynamic_cast<duckdb::CreateTableInfo&>(*info);
-    std::cout << create_table_info.table << std::endl;
     CreateTableInfo ct{wal_type, file_offset};
     ct.table = create_table_info.table;
     ct.columns = create_table_info.columns.GetColumnNames();
+    ct.schema = create_table_info.schema;
     if (create_table_info.query) {
         ct.query = create_table_info.query->ToString();
     }
     nlohmann::json j = ct;
     std::cout << j.dump() << std::endl;
 
+    deserializer.End();
+}
+
+void ParseDropTable(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset) {
+    duckdb::DropInfo info;
+
+	info.type = duckdb::CatalogType::TABLE_ENTRY;
+	info.schema = deserializer.ReadProperty<std::string>(101, "schema");
+	info.name = deserializer.ReadProperty<std::string>(102, "name");
+
+    DropTableInfo dt{wal_type, file_offset};
+    dt.table = info.name;
+    dt.schema = info.schema;
+    nlohmann::json j = dt;
+    std::cout << j.dump() << std::endl;
+
+    deserializer.End();
+}
+
+void ParseInsertTuple(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset) {
+    duckdb::DataChunk chunk;
+	deserializer.ReadObject(101, "chunk", [&](duckdb::Deserializer &object) { chunk.Deserialize(object); });
+    std::cout << chunk.ColumnCount() << std::endl;
     deserializer.End();
 }
 
@@ -138,8 +175,8 @@ void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset
         ParseCreateTable(deserializer, wal_enum_type, offset);
         break;
     case duckdb::WALType::DROP_TABLE:
-    
-    break;
+        ParseDropTable(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::CREATE_SCHEMA:
     
     break;
@@ -192,8 +229,8 @@ void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset
     
     break;
     case duckdb::WALType::INSERT_TUPLE:
-    
-    break;
+        ParseInsertTuple(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::DELETE_TUPLE:
     
     break;

@@ -163,6 +163,18 @@ void ParseDeleteTuple(duckdb::BinaryDeserializer& deserializer, duckdb::WALType 
     ASSERT(dynamic_cast<const BufferStream&>(deserializer.GetStream()).Done());
 }
 
+void ReplayUpdate(duckdb::BinaryDeserializer& deserializer, duckdb::WALType wal_type, size_t file_offset) {
+    auto column_path = deserializer.ReadProperty<duckdb::vector<duckdb::column_t>>(101, "column_indexes");
+
+	duckdb::DataChunk chunk;
+	deserializer.ReadObject(102, "chunk", [&](duckdb::Deserializer &object) { chunk.Deserialize(object); });
+    fmt::print("wal_type={}, file_offset={}\n",
+        duckdb::EnumUtil::ToString(wal_type), file_offset);
+    std::cout << chunk.ToString() << std::endl;
+    deserializer.End();
+    ASSERT(dynamic_cast<const BufferStream&>(deserializer.GetStream()).Done());
+}
+
 void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset) {
     BufferStream stream(wal_buf.get(), sz);
     duckdb::BinaryDeserializer deserializer(stream);
@@ -237,8 +249,8 @@ void ParseWalRecord(std::unique_ptr<uint8_t[]> wal_buf, size_t sz, size_t offset
         ParseDeleteTuple(deserializer, wal_enum_type, offset);
         break;
     case duckdb::WALType::UPDATE_TUPLE:
-    
-    break;
+        ReplayUpdate(deserializer, wal_enum_type, offset);
+        break;
     case duckdb::WALType::ROW_GROUP_DATA:
     
     break;
